@@ -49,6 +49,41 @@ public class CameraPreview: CAPPlugin, CAPBridgedPlugin {
             .flatMap({ $0 as? UIWindowScene })?.interfaceOrientation ?? .unknown
     }
 
+    private func removeOrientationObserver() {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: UIDevice.orientationDidChangeNotification,
+            object: nil
+        )
+    }
+
+    private func restoreWebViewAppearance() {
+        self.webView?.isOpaque = true
+        self.webView?.backgroundColor = nil
+        self.webView?.scrollView.backgroundColor = nil
+    }
+
+    private func cleanupPreviewArtifacts() {
+        removeOrientationObserver()
+        self.cameraController.removePluginGestures()
+        self.cameraController.clearPreviewLayer()
+
+        if let previewView = self.previewView {
+            previewView.removeFromSuperview()
+            self.previewView = nil
+        }
+
+        restoreWebViewAppearance()
+    }
+
+    private func teardownPreview(stopSession: Bool) {
+        if stopSession, self.cameraController.captureSession?.isRunning ?? false {
+            self.cameraController.captureSession?.stopRunning()
+        }
+
+        cleanupPreviewArtifacts()
+    }
+
     @objc func rotated() {
         guard let previewView = self.previewView,
               let x = self.x,
@@ -63,12 +98,12 @@ public class CameraPreview: CAPPlugin, CAPBridgedPlugin {
 
         if orientation.isLandscape {
             previewView.frame = CGRect(x: y, y: x, width: max(adjustedHeight, width), height: min(adjustedHeight, width))
-            self.cameraController.previewLayer?.frame = previewView.frame
+            self.cameraController.previewLayer?.frame = previewView.bounds
         }
 
         if orientation.isPortrait {
             previewView.frame = CGRect(x: x, y: y, width: min(adjustedHeight, width), height: max(adjustedHeight, width))
-            self.cameraController.previewLayer?.frame = previewView.frame
+            self.cameraController.previewLayer?.frame = previewView.bounds
         }
 
         cameraController.updateVideoOrientation()
@@ -112,7 +147,10 @@ public class CameraPreview: CAPPlugin, CAPBridgedPlugin {
                 if self.cameraController.captureSession?.isRunning ?? false {
                     call.reject("camera already started")
                     return
-                } 
+                }
+
+                self.cleanupPreviewArtifacts()
+
                 self.cameraController.prepare(cameraPosition: self.cameraPosition, disableAudio: self.disableAudio) {error in
                     if let error = error {
                         print(error)
@@ -133,7 +171,13 @@ public class CameraPreview: CAPPlugin, CAPBridgedPlugin {
                     if let toBack = self.toBack, toBack {
                         self.webView?.superview?.bringSubviewToFront(self.webView!)
                     }
-                    try? self.cameraController.displayPreview(on: self.previewView)
+                    do {
+                        try self.cameraController.displayPreview(on: self.previewView)
+                    } catch {
+                        self.cleanupPreviewArtifacts()
+                        call.reject(error.localizedDescription)
+                        return
+                    }
 
                     let frontView = (self.toBack ?? false) ? self.webView : self.previewView
                     self.cameraController.setupGestures(target: frontView ?? self.previewView, enableZoom: self.enableZoom ?? false)
@@ -159,23 +203,8 @@ public class CameraPreview: CAPPlugin, CAPBridgedPlugin {
 
     @objc func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            if self.cameraController.captureSession?.isRunning ?? false {
-                self.cameraController.captureSession?.stopRunning()
-
-                // Remove the orientation observer to prevent crashes
-                if self.rotateWhenOrientationChanged == true {
-                    NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
-                }
-
-                if let previewView = self.previewView {
-                    previewView.removeFromSuperview()
-                    self.previewView = nil
-                }
-                self.webView?.isOpaque = true
-                call.resolve()
-            } else {
-                call.reject("camera already stopped")
-            }
+            self.teardownPreview(stopSession: true)
+            call.resolve()
         }
     }
     // Get user's cache directory path
