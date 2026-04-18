@@ -36,6 +36,8 @@ class CameraController: NSObject {
     var audioInput: AVCaptureDeviceInput?
 
     var zoomFactor: CGFloat = 1.0
+    weak var gestureTargetView: UIView?
+    var pluginGestureRecognizers: [UIGestureRecognizer] = []
 }
 
 extension CameraController {
@@ -160,12 +162,14 @@ extension CameraController {
         self.previewLayer?.videoGravity = AVLayerVideoGravity.resizeAspectFill
 
         view.layer.insertSublayer(self.previewLayer!, at: 0)
-        self.previewLayer?.frame = view.frame
+        self.previewLayer?.frame = view.bounds
 
         updateVideoOrientation()
     }
 
     func setupGestures(target: UIView, enableZoom: Bool) {
+        removePluginGestures()
+        gestureTargetView = target
         setupTapGesture(target: target, selector: #selector(handleTap(_:)), delegate: self)
         if enableZoom {
             setupPinchGesture(target: target, selector: #selector(handlePinch(_:)), delegate: self)
@@ -176,12 +180,33 @@ extension CameraController {
         let tapGesture = UITapGestureRecognizer(target: self, action: selector)
         tapGesture.delegate = delegate
         target.addGestureRecognizer(tapGesture)
+        pluginGestureRecognizers.append(tapGesture)
     }
 
     func setupPinchGesture(target: UIView, selector: Selector, delegate: UIGestureRecognizerDelegate?) {
         let pinchGesture = UIPinchGestureRecognizer(target: self, action: selector)
         pinchGesture.delegate = delegate
         target.addGestureRecognizer(pinchGesture)
+        pluginGestureRecognizers.append(pinchGesture)
+    }
+
+    func removePluginGestures() {
+        guard let target = gestureTargetView else {
+            pluginGestureRecognizers.removeAll()
+            return
+        }
+
+        for gestureRecognizer in pluginGestureRecognizers {
+            target.removeGestureRecognizer(gestureRecognizer)
+        }
+
+        pluginGestureRecognizers.removeAll()
+        gestureTargetView = nil
+    }
+
+    func clearPreviewLayer() {
+        previewLayer?.removeFromSuperlayer()
+        previewLayer = nil
     }
 
     func updateVideoOrientation() {
